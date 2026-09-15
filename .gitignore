@@ -1,0 +1,3 @@
+/ollama-embed-shard-proxy
+*.test
+.codegraph-native/
