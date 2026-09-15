@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"io"
@@ -382,6 +383,41 @@ func TestProxy_reports_the_root_error_instead_of_a_canceled_sibling(t *testing.T
 	}
 	if !strings.Contains(response.Body.String(), "backend 1: status 400: input exceeds the context length") {
 		t.Fatalf("body = %q, want backend 1 context error", response.Body.String())
+	}
+}
+
+func TestProxy_decodes_backend_gzip_when_client_requests_compression(t *testing.T) {
+	// Given
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			w.Header().Set("Content-Encoding", "gzip")
+			writer := gzip.NewWriter(w)
+			if _, err := writer.Write([]byte(`{"embeddings":[[1]]}`)); err != nil {
+				t.Errorf("write compressed response: %v", err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Errorf("close compressed response: %v", err)
+			}
+			return
+		}
+		if _, err := w.Write([]byte(`{"embeddings":[[1]]}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	t.Cleanup(backend.Close)
+	backendURL := parseTestURL(t, backend.URL)
+	handler := newProxy([2]*url.URL{backendURL, backendURL}, &http.Client{Timeout: time.Second})
+	request := httptest.NewRequest(http.MethodPost, "/api/embed", strings.NewReader(`{"model":"test","input":["one"]}`))
+	request.Header.Set("Accept-Encoding", "gzip")
+	response := httptest.NewRecorder()
+
+	// When
+	handler.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", response.Code, response.Body.String())
 	}
 }
 

@@ -242,7 +242,10 @@ func removeHopByHopHeaders(headers http.Header) {
 		headers.Del(strings.TrimSpace(name))
 	}
 	for _, name := range []string{
+		"Accept-Encoding",
 		"Connection",
+		"Content-Encoding",
+		"Content-Length",
 		"Keep-Alive",
 		"Proxy-Authenticate",
 		"Proxy-Authorization",
