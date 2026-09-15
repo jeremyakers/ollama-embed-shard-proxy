@@ -77,6 +77,11 @@ type proxy struct {
 
 func newProxy(backends [2]*url.URL, client *http.Client) http.Handler {
 	fallback := httputil.NewSingleHostReverseProxy(backends[0])
+	direct := fallback.Director
+	fallback.Director = func(request *http.Request) {
+		direct(request)
+		request.Host = backends[0].Host
+	}
 	if client.Transport != nil {
 		fallback.Transport = client.Transport
 	}

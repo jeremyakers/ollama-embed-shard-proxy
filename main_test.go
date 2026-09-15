@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -159,6 +160,38 @@ func TestProxy_applies_timeout_to_pass_through_routes(t *testing.T) {
 		&http.Client{Transport: transport, Timeout: time.Second},
 	)
 	request := httptest.NewRequest(http.MethodGet, "/api/tags", nil)
+	response := httptest.NewRecorder()
+
+	// When
+	handler.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestProxy_rewrites_host_for_pass_through_routes(t *testing.T) {
+	// Given
+	firstURL := parseTestURL(t, "http://first.example")
+	secondURL := parseTestURL(t, "http://second.example")
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Host != firstURL.Host {
+			return nil, fmt.Errorf("host = %q, want %q", request.Host, firstURL.Host)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"models":[]}`)),
+			Header:     make(http.Header),
+			Request:    request,
+		}, nil
+	})
+	handler := newProxy(
+		[2]*url.URL{firstURL, secondURL},
+		&http.Client{Transport: transport, Timeout: time.Second},
+	)
+	request := httptest.NewRequest(http.MethodGet, "/api/tags", nil)
+	request.Host = "proxy.example"
 	response := httptest.NewRecorder()
 
 	// When
