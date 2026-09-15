@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestParseBackends_requires_two_HTTP_URLs(t *testing.T) {
 	tests := []struct {
@@ -27,6 +30,32 @@ func TestParseBackends_requires_two_HTTP_URLs(t *testing.T) {
 			}
 			if !test.wantErr && len(backends) != 2 {
 				t.Fatalf("backend count = %d, want 2", len(backends))
+			}
+		})
+	}
+}
+
+func TestValidateTimeout_requires_positive_duration(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   time.Duration
+		wantErr bool
+	}{
+		{name: "positive", value: time.Second},
+		{name: "zero", value: 0, wantErr: true},
+		{name: "negative", value: -time.Second, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// When
+			err := validateTimeout(test.value)
+
+			// Then
+			if test.wantErr && err == nil {
+				t.Fatalf("validateTimeout(%s) error = nil, want error", test.value)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("validateTimeout(%s) error = %v", test.value, err)
 			}
 		})
 	}

@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	maxRequestBodySize = 2 << 20
-	shutdownTimeout    = 10 * time.Minute
+	maxRequestBodySize  = 2 << 20
+	maxResponseBodySize = 16 << 20
+	maxInputCount       = 128
+	shutdownTimeout     = 10 * time.Minute
 )
 
 type embedRequest struct {
@@ -110,13 +112,20 @@ func parseBackends(value string) ([2]*url.URL, error) {
 	return backends, nil
 }
 
+func validateTimeout(value time.Duration) error {
+	if value <= 0 {
+		return fmt.Errorf("timeout must be positive")
+	}
+	return nil
+}
+
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/healthz" {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 	if r.URL.Path != "/api/embed" {
-		if p.client.Timeout == 0 {
+		if p.client.Timeout <= 0 {
 			p.fallback.ServeHTTP(w, r)
 			return
 		}
@@ -143,6 +152,10 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.Model == "" || len(request.Input) == 0 {
 		http.Error(w, "model and input are required", http.StatusBadRequest)
+		return
+	}
+	if len(request.Input) > maxInputCount {
+		http.Error(w, fmt.Sprintf("input count exceeds maximum of %d", maxInputCount), http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -229,12 +242,16 @@ func (p *proxy) embed(ctx context.Context, backend *url.URL, shard shardRequest)
 	}
 
 	var result embedResponse
-	decoder := json.NewDecoder(response.Body)
+	limitedBody := &io.LimitedReader{R: response.Body, N: maxResponseBodySize + 1}
+	decoder := json.NewDecoder(limitedBody)
 	if err := decoder.Decode(&result); err != nil {
 		return embedResponse{}, fmt.Errorf("decode response: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return embedResponse{}, fmt.Errorf("decode response: trailing data")
+	}
+	if limitedBody.N == 0 {
+		return embedResponse{}, fmt.Errorf("decode response: body exceeds %d bytes", maxResponseBodySize)
 	}
 	if len(result.Embeddings) != len(shard.inputs) {
 		return embedResponse{}, fmt.Errorf("expected %d embeddings, got %d", len(shard.inputs), len(result.Embeddings))
@@ -243,8 +260,10 @@ func (p *proxy) embed(ctx context.Context, backend *url.URL, shard shardRequest)
 }
 
 func removeHopByHopHeaders(headers http.Header) {
-	for _, name := range strings.Split(headers.Get("Connection"), ",") {
-		headers.Del(strings.TrimSpace(name))
+	for _, value := range headers.Values("Connection") {
+		for _, name := range strings.Split(value, ",") {
+			headers.Del(strings.TrimSpace(name))
+		}
 	}
 	for _, name := range []string{
 		"Accept-Encoding",
@@ -293,6 +312,9 @@ func main() {
 	requestTimeout := flag.Duration("timeout", 10*time.Minute, "backend request timeout")
 	flag.Parse()
 
+	if err := validateTimeout(*requestTimeout); err != nil {
+		log.Fatal(err)
+	}
 	backends, err := parseBackends(*backendList)
 	if err != nil {
 		log.Fatal(err)
