@@ -182,11 +182,15 @@ func TestProxy_applies_timeout_to_pass_through_routes(t *testing.T) {
 
 func TestProxy_rewrites_host_for_pass_through_routes(t *testing.T) {
 	// Given
-	firstURL := parseTestURL(t, "http://first.example")
+	firstURL := parseTestURL(t, "http://user:password@first.example")
 	secondURL := parseTestURL(t, "http://second.example")
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Host != firstURL.Host {
 			return nil, fmt.Errorf("host = %q, want %q", request.Host, firstURL.Host)
+		}
+		username, password, ok := request.BasicAuth()
+		if !ok || username != "user" || password != "password" {
+			return nil, fmt.Errorf("basic auth = (%q, %q, %v), want configured credentials", username, password, ok)
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,

@@ -84,6 +84,10 @@ func newProxy(backends [2]*url.URL, client *http.Client) http.Handler {
 	fallback.Director = func(request *http.Request) {
 		direct(request)
 		request.Host = backends[0].Host
+		if backends[0].User != nil {
+			password, _ := backends[0].User.Password()
+			request.SetBasicAuth(backends[0].User.Username(), password)
+		}
 	}
 	if client.Transport != nil {
 		fallback.Transport = client.Transport
