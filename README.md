@@ -86,6 +86,7 @@ The full Qwen workspace rebuild completed through this proxy. The proxy exposed 
 - Exactly two static backends.
 - At most 128 inputs, a 2 MiB request body, and a 16 MiB response per shard.
 - No authentication, TLS, discovery, metrics, retries, or circuit breaker.
+- Sharded backend redirects are not followed.
 - Non-`/api/embed` routes always use the first backend.
 - Backend health and vector compatibility are deployment responsibilities.
 

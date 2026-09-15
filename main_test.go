@@ -414,6 +414,30 @@ func TestProxy_rejects_excessive_input_count(t *testing.T) {
 	}
 }
 
+func TestProxy_rejects_null_input_elements(t *testing.T) {
+	// Given
+	var backendRequests atomic.Int64
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		backendRequests.Add(1)
+	}))
+	t.Cleanup(backend.Close)
+	backendURL := parseTestURL(t, backend.URL)
+	handler := newProxy([2]*url.URL{backendURL, backendURL}, &http.Client{Timeout: time.Second})
+	request := httptest.NewRequest(http.MethodPost, "/api/embed", strings.NewReader(`{"model":"test","input":[null]}`))
+	response := httptest.NewRecorder()
+
+	// When
+	handler.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", response.Code)
+	}
+	if backendRequests.Load() != 0 {
+		t.Fatalf("backend requests = %d, want 0", backendRequests.Load())
+	}
+}
+
 func TestProxy_returns_payload_too_large_for_oversized_request(t *testing.T) {
 	// Given
 	var backendRequests atomic.Int64
@@ -549,6 +573,36 @@ func TestProxy_decodes_backend_gzip_when_client_requests_compression(t *testing.
 	// Then
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestProxy_does_not_follow_backend_redirects(t *testing.T) {
+	// Given
+	var redirectedRequests atomic.Int64
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirectedRequests.Add(1)
+	}))
+	t.Cleanup(redirectTarget.Close)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", redirectTarget.URL)
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(backend.Close)
+	backendURL := parseTestURL(t, backend.URL)
+	handler := newProxy([2]*url.URL{backendURL, backendURL}, &http.Client{Timeout: time.Second})
+	request := httptest.NewRequest(http.MethodPost, "/api/embed", strings.NewReader(`{"model":"test","input":["one"]}`))
+	request.Header.Set("X-API-Key", "sensitive")
+	response := httptest.NewRecorder()
+
+	// When
+	handler.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", response.Code)
+	}
+	if redirectedRequests.Load() != 0 {
+		t.Fatalf("redirected requests = %d, want 0", redirectedRequests.Load())
 	}
 }
 

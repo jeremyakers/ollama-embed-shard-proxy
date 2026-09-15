@@ -21,12 +21,13 @@ import (
 )
 
 const (
-	maxRequestBodySize  = 2 << 20
-	maxResponseBodySize = 16 << 20
-	maxInputCount       = 128
-	maxBackendTimeout   = 10 * time.Minute
-	requestReadTimeout  = 30 * time.Second
-	shutdownTimeout     = maxBackendTimeout
+	maxRequestBodySize   = 2 << 20
+	maxResponseBodySize  = 16 << 20
+	maxInputCount        = 128
+	maxBackendTimeout    = 10 * time.Minute
+	requestReadTimeout   = 30 * time.Second
+	responseWriteTimeout = 30 * time.Second
+	shutdownTimeout      = maxBackendTimeout
 )
 
 type embedRequest struct {
@@ -41,8 +42,21 @@ type embedRequest struct {
 type embedInput []string
 
 func (i *embedInput) UnmarshalJSON(data []byte) error {
-	var inputs []string
-	if err := json.Unmarshal(data, &inputs); err == nil {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var rawInputs []json.RawMessage
+		if err := json.Unmarshal(trimmed, &rawInputs); err != nil {
+			return fmt.Errorf("input must be a string or string array: %w", err)
+		}
+		inputs := make([]string, len(rawInputs))
+		for index, rawInput := range rawInputs {
+			if string(rawInput) == "null" {
+				return fmt.Errorf("input element %d must be a string", index)
+			}
+			if err := json.Unmarshal(rawInput, &inputs[index]); err != nil {
+				return fmt.Errorf("input element %d must be a string: %w", index, err)
+			}
+		}
 		*i = inputs
 		return nil
 	}
@@ -80,6 +94,10 @@ type proxy struct {
 }
 
 func newProxy(backends [2]*url.URL, client *http.Client) http.Handler {
+	shardClient := *client
+	shardClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	fallback := httputil.NewSingleHostReverseProxy(backends[0])
 	direct := fallback.Director
 	fallback.Director = func(request *http.Request) {
@@ -92,7 +110,7 @@ func newProxy(backends [2]*url.URL, client *http.Client) http.Handler {
 	fallback.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
 		http.Error(w, fmt.Sprintf("backend 0: %v", err), http.StatusBadGateway)
 	}
-	return &proxy{backends: backends, client: client, fallback: fallback}
+	return &proxy{backends: backends, client: &shardClient, fallback: fallback}
 }
 
 func parseBackends(value string) ([2]*url.URL, error) {
@@ -229,6 +247,12 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		combined.PromptEvalCount += result.response.PromptEvalCount
 	}
 
+	if err := responseController.SetWriteDeadline(time.Now().Add(responseWriteTimeout)); err == nil {
+		defer responseController.SetWriteDeadline(time.Time{})
+	} else if !errors.Is(err, http.ErrNotSupported) {
+		http.Error(w, fmt.Sprintf("set response write deadline: %v", err), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(combined); err != nil {
 		return

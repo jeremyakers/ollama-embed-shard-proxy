@@ -77,6 +77,9 @@ func TestProxy_sets_read_deadline_for_embed_requests(t *testing.T) {
 	if !response.deadlineSet {
 		t.Fatal("embed request read deadline was not set")
 	}
+	if !response.writeDeadlineSet {
+		t.Fatal("embed response write deadline was not set")
+	}
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
@@ -84,7 +87,15 @@ func TestProxy_sets_read_deadline_for_embed_requests(t *testing.T) {
 
 type readDeadlineRecorder struct {
 	*httptest.ResponseRecorder
-	deadlineSet bool
+	deadlineSet      bool
+	writeDeadlineSet bool
+}
+
+func (r *readDeadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	if !deadline.IsZero() {
+		r.writeDeadlineSet = true
+	}
+	return nil
 }
 
 func (r *readDeadlineRecorder) SetReadDeadline(deadline time.Time) error {
