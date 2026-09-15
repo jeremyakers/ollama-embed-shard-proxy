@@ -42,6 +42,7 @@ func TestValidateTimeout_requires_positive_duration(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "positive", value: time.Second},
+		{name: "too long", value: 11 * time.Minute, wantErr: true},
 		{name: "zero", value: 0, wantErr: true},
 		{name: "negative", value: -time.Second, wantErr: true},
 	}
@@ -58,5 +59,18 @@ func TestValidateTimeout_requires_positive_duration(t *testing.T) {
 				t.Fatalf("validateTimeout(%s) error = %v", test.value, err)
 			}
 		})
+	}
+}
+
+func TestBackendLogAddress_omits_userinfo(t *testing.T) {
+	// Given
+	backend := parseTestURL(t, "https://user:password@ollama.example:11434/base")
+
+	// When
+	address := backendLogAddress(backend)
+
+	// Then
+	if address != "https://ollama.example:11434" {
+		t.Fatalf("backendLogAddress() = %q, want %q", address, "https://ollama.example:11434")
 	}
 }

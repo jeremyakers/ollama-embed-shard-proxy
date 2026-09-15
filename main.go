@@ -24,7 +24,8 @@ const (
 	maxRequestBodySize  = 2 << 20
 	maxResponseBodySize = 16 << 20
 	maxInputCount       = 128
-	shutdownTimeout     = 10 * time.Minute
+	maxBackendTimeout   = 10 * time.Minute
+	shutdownTimeout     = maxBackendTimeout
 )
 
 type embedRequest struct {
@@ -113,10 +114,14 @@ func parseBackends(value string) ([2]*url.URL, error) {
 }
 
 func validateTimeout(value time.Duration) error {
-	if value <= 0 {
-		return fmt.Errorf("timeout must be positive")
+	if value <= 0 || value > maxBackendTimeout {
+		return fmt.Errorf("timeout must be positive and at most %s", maxBackendTimeout)
 	}
 	return nil
+}
+
+func backendLogAddress(backend *url.URL) string {
+	return (&url.URL{Scheme: backend.Scheme, Host: backend.Host}).String()
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -143,11 +148,21 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var request embedRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodySize))
 	if err := decoder.Decode(&request); err != nil {
-		http.Error(w, fmt.Sprintf("invalid embed request: %v", err), http.StatusBadRequest)
+		status := http.StatusBadRequest
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		http.Error(w, fmt.Sprintf("invalid embed request: %v", err), status)
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		http.Error(w, "invalid embed request: trailing data", http.StatusBadRequest)
+		status := http.StatusBadRequest
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		http.Error(w, "invalid embed request: trailing data", status)
 		return
 	}
 	if request.Model == "" || len(request.Input) == 0 {
@@ -272,6 +287,7 @@ func removeHopByHopHeaders(headers http.Header) {
 		"Content-Length",
 		"Keep-Alive",
 		"Proxy-Authenticate",
+		"Proxy-Connection",
 		"Proxy-Authorization",
 		"Te",
 		"Trailer",
@@ -331,7 +347,12 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	log.Printf("listening on %s; sharding between %s and %s", listener.Addr(), backends[0], backends[1])
+	log.Printf(
+		"listening on %s; sharding between %s and %s",
+		listener.Addr(),
+		backendLogAddress(backends[0]),
+		backendLogAddress(backends[1]),
+	)
 	if err := serve(ctx, server, listener); err != nil {
 		log.Fatal(err)
 	}

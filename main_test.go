@@ -68,6 +68,7 @@ func TestProxy_shards_concurrently_and_preserves_order(t *testing.T) {
 	request.Header.Set("X-API-Key", "test-api-key")
 	request.Header.Add("Connection", "X-First-Hop")
 	request.Header.Add("Connection", "X-Second-Hop")
+	request.Header.Set("Proxy-Connection", "close")
 	request.Header.Set("X-First-Hop", "remove-me")
 	request.Header.Set("X-Second-Hop", "remove-me-too")
 	response := httptest.NewRecorder()
@@ -103,7 +104,7 @@ func TestProxy_shards_concurrently_and_preserves_order(t *testing.T) {
 		if headers.Get("Authorization") != "Bearer test-token" || headers.Get("X-API-Key") != "test-api-key" {
 			t.Fatalf("backend %d authentication headers = %v", i, headers)
 		}
-		if headers.Get("X-First-Hop") != "" || headers.Get("X-Second-Hop") != "" {
+		if headers.Get("X-First-Hop") != "" || headers.Get("X-Second-Hop") != "" || headers.Get("Proxy-Connection") != "" {
 			t.Fatalf("backend %d retained Connection-nominated headers: %v", i, headers)
 		}
 	}
@@ -393,6 +394,31 @@ func TestProxy_rejects_excessive_input_count(t *testing.T) {
 		t.Fatalf("marshal request: %v", err)
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/embed", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+
+	// When
+	handler.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", response.Code)
+	}
+	if backendRequests.Load() != 0 {
+		t.Fatalf("backend requests = %d, want 0", backendRequests.Load())
+	}
+}
+
+func TestProxy_returns_payload_too_large_for_oversized_request(t *testing.T) {
+	// Given
+	var backendRequests atomic.Int64
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		backendRequests.Add(1)
+	}))
+	t.Cleanup(backend.Close)
+	backendURL := parseTestURL(t, backend.URL)
+	handler := newProxy([2]*url.URL{backendURL, backendURL}, &http.Client{Timeout: time.Second})
+	requestBody := `{"model":"test","input":"` + strings.Repeat("x", maxRequestBodySize) + `"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/embed", strings.NewReader(requestBody))
 	response := httptest.NewRecorder()
 
 	// When
