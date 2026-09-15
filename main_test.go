@@ -20,7 +20,9 @@ func TestProxy_shards_concurrently_and_preserves_order(t *testing.T) {
 	var arrivals atomic.Int64
 	var firstInputs []string
 	var secondInputs []string
-	backend := func(inputs *[]string) *httptest.Server {
+	var firstHeaders http.Header
+	var secondHeaders http.Header
+	backend := func(inputs *[]string, headers *http.Header, loadDuration int64) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var request struct {
 				Input []string `json:"input"`
@@ -30,6 +32,7 @@ func TestProxy_shards_concurrently_and_preserves_order(t *testing.T) {
 				return
 			}
 			*inputs = append([]string(nil), request.Input...)
+			*headers = r.Header.Clone()
 			if arrivals.Add(1) == 2 {
 				close(arrived)
 			}
@@ -43,16 +46,14 @@ func TestProxy_shards_concurrently_and_preserves_order(t *testing.T) {
 				embeddings[i] = []float32{float32(len(input))}
 			}
 			w.Header().Set("Content-Type", "application/json")
-			response := struct {
-				Embeddings [][]float32 `json:"embeddings"`
-			}{Embeddings: embeddings}
+			response := embedResponse{Embeddings: embeddings, LoadDuration: loadDuration}
 			if err := json.NewEncoder(w).Encode(response); err != nil {
 				t.Errorf("encode response: %v", err)
 			}
 		}))
 	}
-	first := backend(&firstInputs)
-	second := backend(&secondInputs)
+	first := backend(&firstInputs, &firstHeaders, 10)
+	second := backend(&secondInputs, &secondHeaders, 20)
 	t.Cleanup(first.Close)
 	t.Cleanup(second.Close)
 	firstURL := parseTestURL(t, first.URL)
@@ -60,6 +61,8 @@ func TestProxy_shards_concurrently_and_preserves_order(t *testing.T) {
 	handler := newProxy([2]*url.URL{firstURL, secondURL}, &http.Client{Timeout: time.Second})
 	requestBody := `{"model":"test","input":["a","bb","ccc","dddd","eeeee"],"truncate":false}`
 	request := httptest.NewRequest(http.MethodPost, "/api/embed", strings.NewReader(requestBody))
+	request.Header.Set("Authorization", "Bearer test-token")
+	request.Header.Set("X-API-Key", "test-api-key")
 	response := httptest.NewRecorder()
 
 	// When
@@ -77,6 +80,7 @@ func TestProxy_shards_concurrently_and_preserves_order(t *testing.T) {
 	}
 	var result struct {
 		Embeddings [][]float32 `json:"embeddings"`
+		Load       int64       `json:"load_duration"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -84,6 +88,14 @@ func TestProxy_shards_concurrently_and_preserves_order(t *testing.T) {
 	want := [][]float32{{1}, {2}, {3}, {4}, {5}}
 	if !reflect.DeepEqual(result.Embeddings, want) {
 		t.Fatalf("embeddings = %v, want %v", result.Embeddings, want)
+	}
+	if result.Load != 20 {
+		t.Fatalf("load duration = %d, want 20", result.Load)
+	}
+	for i, headers := range []http.Header{firstHeaders, secondHeaders} {
+		if headers.Get("Authorization") != "Bearer test-token" || headers.Get("X-API-Key") != "test-api-key" {
+			t.Fatalf("backend %d authentication headers = %v", i, headers)
+		}
 	}
 }
 

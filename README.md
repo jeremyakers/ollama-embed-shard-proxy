@@ -33,7 +33,7 @@ curl -fsS http://127.0.0.1:11435/healthz
 
 The bundled systemd unit reads backend URLs from an environment file and verifies both `/api/version` endpoints before starting. `/healthz` itself is a local process-liveness check.
 
-`/api/embed` accepts either a string or string-array `input`. It preserves `truncate`, `keep_alive`, `dimensions`, and `options`. A one-item request uses the first backend. A shard failure cancels its sibling and returns HTTP 502 with the root backend error.
+`/api/embed` accepts either a string or string-array `input`. It preserves `truncate`, `keep_alive`, `dimensions`, `options`, and end-to-end headers such as `Authorization`. A one-item request uses the first backend. A shard failure cancels its sibling and returns HTTP 502 with the root backend error.
 
 ## systemd user service
 

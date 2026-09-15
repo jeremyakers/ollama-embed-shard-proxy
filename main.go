@@ -63,6 +63,12 @@ type shardResult struct {
 	err      error
 }
 
+type shardRequest struct {
+	embedRequest embedRequest
+	inputs       []string
+	headers      http.Header
+}
+
 type proxy struct {
 	backends [2]*url.URL
 	client   *http.Client
@@ -150,7 +156,8 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			results[i].response, results[i].err = p.embed(ctx, p.backends[i], request, inputs)
+			shard := shardRequest{embedRequest: request, inputs: inputs, headers: r.Header}
+			results[i].response, results[i].err = p.embed(ctx, p.backends[i], shard)
 			if results[i].err != nil {
 				cancel()
 			}
@@ -176,7 +183,9 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	combined := embedResponse{Model: request.Model, TotalDuration: time.Since(started).Nanoseconds()}
 	for _, result := range results {
 		combined.Embeddings = append(combined.Embeddings, result.response.Embeddings...)
-		combined.LoadDuration += result.response.LoadDuration
+		if result.response.LoadDuration > combined.LoadDuration {
+			combined.LoadDuration = result.response.LoadDuration
+		}
 		combined.PromptEvalCount += result.response.PromptEvalCount
 	}
 
@@ -186,8 +195,9 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (p *proxy) embed(ctx context.Context, backend *url.URL, request embedRequest, inputs []string) (embedResponse, error) {
-	request.Input = embedInput(inputs)
+func (p *proxy) embed(ctx context.Context, backend *url.URL, shard shardRequest) (embedResponse, error) {
+	request := shard.embedRequest
+	request.Input = embedInput(shard.inputs)
 	body, err := json.Marshal(request)
 	if err != nil {
 		return embedResponse{}, fmt.Errorf("marshal request: %w", err)
@@ -197,6 +207,8 @@ func (p *proxy) embed(ctx context.Context, backend *url.URL, request embedReques
 	if err != nil {
 		return embedResponse{}, fmt.Errorf("create request: %w", err)
 	}
+	httpRequest.Header = shard.headers.Clone()
+	removeHopByHopHeaders(httpRequest.Header)
 	httpRequest.Header.Set("Content-Type", "application/json")
 	response, err := p.client.Do(httpRequest)
 	if err != nil {
@@ -219,10 +231,28 @@ func (p *proxy) embed(ctx context.Context, backend *url.URL, request embedReques
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return embedResponse{}, fmt.Errorf("decode response: trailing data")
 	}
-	if len(result.Embeddings) != len(inputs) {
-		return embedResponse{}, fmt.Errorf("expected %d embeddings, got %d", len(inputs), len(result.Embeddings))
+	if len(result.Embeddings) != len(shard.inputs) {
+		return embedResponse{}, fmt.Errorf("expected %d embeddings, got %d", len(shard.inputs), len(result.Embeddings))
 	}
 	return result, nil
+}
+
+func removeHopByHopHeaders(headers http.Header) {
+	for _, name := range strings.Split(headers.Get("Connection"), ",") {
+		headers.Del(strings.TrimSpace(name))
+	}
+	for _, name := range []string{
+		"Connection",
+		"Keep-Alive",
+		"Proxy-Authenticate",
+		"Proxy-Authorization",
+		"Te",
+		"Trailer",
+		"Transfer-Encoding",
+		"Upgrade",
+	} {
+		headers.Del(name)
+	}
 }
 
 func serve(ctx context.Context, server *http.Server, listener net.Listener) error {
