@@ -16,6 +16,8 @@ func TestParseBackends_requires_two_HTTP_URLs(t *testing.T) {
 		{name: "unsupported scheme", value: "ftp://ollama-a.example,http://ollama-b.example:11434", wantErr: true},
 		{name: "missing host", value: "http:///one,http://ollama-b.example:11434", wantErr: true},
 		{name: "URL credentials", value: "http://user:password@ollama-a.example,http://ollama-b.example", wantErr: true},
+		{name: "query credentials", value: "http://ollama-a.example?api_key=secret,http://ollama-b.example", wantErr: true},
+		{name: "URL fragment", value: "http://ollama-a.example#secret,http://ollama-b.example", wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -9,7 +9,7 @@ EnvironmentFile=%h/.config/ollama-embed-shard-proxy/environment
 ExecStart=%h/.local/bin/ollama-embed-shard-proxy -listen ${LISTEN_ADDRESS} -backends ${OLLAMA_BACKEND_0},${OLLAMA_BACKEND_1} -timeout ${BACKEND_TIMEOUT}
 Restart=on-failure
 RestartSec=2s
-TimeoutStopSec=11m
+TimeoutStopSec=13m
 NoNewPrivileges=true
 PrivateTmp=true
 

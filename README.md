@@ -9,6 +9,7 @@ All other Ollama routes are passed to the first backend. The service is intended
 - Go 1.26 or newer to build.
 - Exactly two Ollama backends serving the same model, dimensions, tokenizer, pooling, context, and inference settings.
 - Backend vectors must be verified compatible before use. Do not mix embedding spaces.
+- Backend base URLs may include a path, but not userinfo credentials, query parameters, or fragments. Supply `Authorization` or `X-API-Key` on client requests instead.
 
 ## Build
 

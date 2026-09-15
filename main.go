@@ -27,8 +27,10 @@ const (
 	maxBackendTimeout    = 10 * time.Minute
 	requestReadTimeout   = 30 * time.Second
 	responseWriteTimeout = 30 * time.Second
-	shutdownTimeout      = maxBackendTimeout
+	shutdownTimeout      = maxBackendTimeout + requestReadTimeout + responseWriteTimeout + time.Minute
 )
+
+var errTooManyInputs = errors.New("input count exceeds maximum")
 
 type embedRequest struct {
 	Model      string          `json:"model"`
@@ -44,27 +46,38 @@ type embedInput []string
 func (i *embedInput) UnmarshalJSON(data []byte) error {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) > 0 && trimmed[0] == '[' {
-		var rawInputs []json.RawMessage
-		if err := json.Unmarshal(trimmed, &rawInputs); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(trimmed))
+		if _, err := decoder.Token(); err != nil {
 			return fmt.Errorf("input must be a string or string array: %w", err)
 		}
-		inputs := make([]string, len(rawInputs))
-		for index, rawInput := range rawInputs {
-			if string(rawInput) == "null" {
-				return fmt.Errorf("input element %d must be a string", index)
+		inputs := make([]string, 0, min(maxInputCount, 16))
+		for decoder.More() {
+			if len(inputs) >= maxInputCount {
+				return fmt.Errorf("%w of %d", errTooManyInputs, maxInputCount)
 			}
-			if err := json.Unmarshal(rawInput, &inputs[index]); err != nil {
-				return fmt.Errorf("input element %d must be a string: %w", index, err)
+			var input *string
+			if err := decoder.Decode(&input); err != nil {
+				return fmt.Errorf("input element %d must be a string: %w", len(inputs), err)
 			}
+			if input == nil {
+				return fmt.Errorf("input element %d must be a string", len(inputs))
+			}
+			inputs = append(inputs, *input)
+		}
+		if _, err := decoder.Token(); err != nil {
+			return fmt.Errorf("input must be a string array: %w", err)
 		}
 		*i = inputs
 		return nil
 	}
-	var input string
+	var input *string
 	if err := json.Unmarshal(data, &input); err != nil {
 		return fmt.Errorf("input must be a string or string array: %w", err)
 	}
-	*i = []string{input}
+	if input == nil {
+		return fmt.Errorf("input must be a string or string array")
+	}
+	*i = []string{*input}
 	return nil
 }
 
@@ -130,6 +143,9 @@ func parseBackends(value string) ([2]*url.URL, error) {
 		if backend.User != nil {
 			return backends, fmt.Errorf("backend %d must not contain URL credentials", i)
 		}
+		if backend.RawQuery != "" || backend.Fragment != "" {
+			return backends, fmt.Errorf("backend %d must not contain a query or fragment", i)
+		}
 		backends[i] = backend
 	}
 	return backends, nil
@@ -175,7 +191,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := decoder.Decode(&request); err != nil {
 		status := http.StatusBadRequest
 		var maxBytesError *http.MaxBytesError
-		if errors.As(err, &maxBytesError) {
+		if errors.As(err, &maxBytesError) || errors.Is(err, errTooManyInputs) {
 			status = http.StatusRequestEntityTooLarge
 		}
 		http.Error(w, fmt.Sprintf("invalid embed request: %v", err), status)

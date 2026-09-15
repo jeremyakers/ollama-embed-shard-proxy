@@ -85,6 +85,16 @@ func TestProxy_sets_read_deadline_for_embed_requests(t *testing.T) {
 	}
 }
 
+func TestShutdownTimeout_covers_all_embed_phases(t *testing.T) {
+	// When
+	minimum := requestReadTimeout + maxBackendTimeout + responseWriteTimeout
+
+	// Then
+	if shutdownTimeout <= minimum {
+		t.Fatalf("shutdown timeout = %s, want greater than %s", shutdownTimeout, minimum)
+	}
+}
+
 type readDeadlineRecorder struct {
 	*httptest.ResponseRecorder
 	deadlineSet      bool

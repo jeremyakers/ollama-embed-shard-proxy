@@ -438,6 +438,30 @@ func TestProxy_rejects_null_input_elements(t *testing.T) {
 	}
 }
 
+func TestProxy_rejects_null_scalar_input(t *testing.T) {
+	// Given
+	var backendRequests atomic.Int64
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		backendRequests.Add(1)
+	}))
+	t.Cleanup(backend.Close)
+	backendURL := parseTestURL(t, backend.URL)
+	handler := newProxy([2]*url.URL{backendURL, backendURL}, &http.Client{Timeout: time.Second})
+	request := httptest.NewRequest(http.MethodPost, "/api/embed", strings.NewReader(`{"model":"test","input":null}`))
+	response := httptest.NewRecorder()
+
+	// When
+	handler.ServeHTTP(response, request)
+
+	// Then
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", response.Code)
+	}
+	if backendRequests.Load() != 0 {
+		t.Fatalf("backend requests = %d, want 0", backendRequests.Load())
+	}
+}
+
 func TestProxy_returns_payload_too_large_for_oversized_request(t *testing.T) {
 	// Given
 	var backendRequests atomic.Int64
