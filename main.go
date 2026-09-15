@@ -25,6 +25,7 @@ const (
 	maxResponseBodySize = 16 << 20
 	maxInputCount       = 128
 	maxBackendTimeout   = 10 * time.Minute
+	requestReadTimeout  = 30 * time.Second
 	shutdownTimeout     = maxBackendTimeout
 )
 
@@ -326,6 +327,16 @@ func serve(ctx context.Context, server *http.Server, listener net.Listener) erro
 	}
 }
 
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       requestReadTimeout,
+		IdleTimeout:       time.Minute,
+	}
+}
+
 func main() {
 	listenAddress := flag.String("listen", "127.0.0.1:11435", "proxy listen address")
 	backendList := flag.String("backends", "", "two comma-separated Ollama base URLs")
@@ -339,12 +350,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	server := &http.Server{
-		Addr:              *listenAddress,
-		Handler:           newProxy(backends, &http.Client{Timeout: *requestTimeout}),
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       time.Minute,
-	}
+	server := newHTTPServer(*listenAddress, newProxy(backends, &http.Client{Timeout: *requestTimeout}))
 	listener, err := net.Listen("tcp", *listenAddress)
 	if err != nil {
 		log.Fatal(err)

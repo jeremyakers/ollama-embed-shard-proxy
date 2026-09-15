@@ -48,3 +48,16 @@ func TestServe_shuts_down_when_context_is_canceled(t *testing.T) {
 		t.Fatal("serve() did not stop after cancellation")
 	}
 }
+
+func TestNewHTTPServer_bounds_request_body_reads(t *testing.T) {
+	// Given
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+
+	// When
+	server := newHTTPServer("127.0.0.1:0", handler)
+
+	// Then
+	if server.ReadTimeout <= 0 {
+		t.Fatalf("ReadTimeout = %s, want positive duration", server.ReadTimeout)
+	}
+}
