@@ -71,6 +71,9 @@ func TestProxy_shards_concurrently_and_preserves_order(t *testing.T) {
 	request.Header.Set("Proxy-Connection", "close")
 	request.Header.Set("X-First-Hop", "remove-me")
 	request.Header.Set("X-Second-Hop", "remove-me-too")
+	request.Header.Set("Content-MD5", "stale-digest")
+	request.Header.Set("Digest", "sha-256=stale")
+	request.Header.Set("Content-Digest", "sha-256=:stale:")
 	response := httptest.NewRecorder()
 
 	// When
@@ -106,6 +109,9 @@ func TestProxy_shards_concurrently_and_preserves_order(t *testing.T) {
 		}
 		if headers.Get("X-First-Hop") != "" || headers.Get("X-Second-Hop") != "" || headers.Get("Proxy-Connection") != "" {
 			t.Fatalf("backend %d retained Connection-nominated headers: %v", i, headers)
+		}
+		if headers.Get("Content-MD5") != "" || headers.Get("Digest") != "" || headers.Get("Content-Digest") != "" {
+			t.Fatalf("backend %d retained stale body digests: %v", i, headers)
 		}
 	}
 }
@@ -182,15 +188,11 @@ func TestProxy_applies_timeout_to_pass_through_routes(t *testing.T) {
 
 func TestProxy_rewrites_host_for_pass_through_routes(t *testing.T) {
 	// Given
-	firstURL := parseTestURL(t, "http://user:password@first.example")
+	firstURL := parseTestURL(t, "http://first.example")
 	secondURL := parseTestURL(t, "http://second.example")
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Host != firstURL.Host {
 			return nil, fmt.Errorf("host = %q, want %q", request.Host, firstURL.Host)
-		}
-		username, password, ok := request.BasicAuth()
-		if !ok || username != "user" || password != "password" {
-			return nil, fmt.Errorf("basic auth = (%q, %q, %v), want configured credentials", username, password, ok)
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,

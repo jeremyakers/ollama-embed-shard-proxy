@@ -15,6 +15,7 @@ func TestParseBackends_requires_two_HTTP_URLs(t *testing.T) {
 		{name: "one backend", value: "http://ollama-a.example:11434", wantErr: true},
 		{name: "unsupported scheme", value: "ftp://ollama-a.example,http://ollama-b.example:11434", wantErr: true},
 		{name: "missing host", value: "http:///one,http://ollama-b.example:11434", wantErr: true},
+		{name: "URL credentials", value: "http://user:password@ollama-a.example,http://ollama-b.example", wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -59,18 +60,5 @@ func TestValidateTimeout_requires_positive_duration(t *testing.T) {
 				t.Fatalf("validateTimeout(%s) error = %v", test.value, err)
 			}
 		})
-	}
-}
-
-func TestBackendLogAddress_omits_userinfo(t *testing.T) {
-	// Given
-	backend := parseTestURL(t, "https://user:password@ollama.example:11434/base")
-
-	// When
-	address := backendLogAddress(backend)
-
-	// Then
-	if address != "https://ollama.example:11434" {
-		t.Fatalf("backendLogAddress() = %q, want %q", address, "https://ollama.example:11434")
 	}
 }

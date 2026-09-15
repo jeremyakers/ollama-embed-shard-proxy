@@ -85,10 +85,6 @@ func newProxy(backends [2]*url.URL, client *http.Client) http.Handler {
 	fallback.Director = func(request *http.Request) {
 		direct(request)
 		request.Host = backends[0].Host
-		if backends[0].User != nil {
-			password, _ := backends[0].User.Password()
-			request.SetBasicAuth(backends[0].User.Username(), password)
-		}
 	}
 	if client.Transport != nil {
 		fallback.Transport = client.Transport
@@ -113,6 +109,9 @@ func parseBackends(value string) ([2]*url.URL, error) {
 		if (backend.Scheme != "http" && backend.Scheme != "https") || backend.Host == "" {
 			return backends, fmt.Errorf("backend %d must be an HTTP URL with a host", i)
 		}
+		if backend.User != nil {
+			return backends, fmt.Errorf("backend %d must not contain URL credentials", i)
+		}
 		backends[i] = backend
 	}
 	return backends, nil
@@ -123,10 +122,6 @@ func validateTimeout(value time.Duration) error {
 		return fmt.Errorf("timeout must be positive and at most %s", maxBackendTimeout)
 	}
 	return nil
-}
-
-func backendLogAddress(backend *url.URL) string {
-	return (&url.URL{Scheme: backend.Scheme, Host: backend.Host}).String()
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -147,6 +142,13 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	responseController := http.NewResponseController(w)
+	if err := responseController.SetReadDeadline(time.Now().Add(requestReadTimeout)); err == nil {
+		defer responseController.SetReadDeadline(time.Time{})
+	} else if !errors.Is(err, http.ErrNotSupported) {
+		http.Error(w, fmt.Sprintf("set request read deadline: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -245,9 +247,12 @@ func (p *proxy) embed(ctx context.Context, backend *url.URL, shard shardRequest)
 	if err != nil {
 		return embedResponse{}, fmt.Errorf("create request: %w", err)
 	}
-	httpRequest.Header = shard.headers.Clone()
-	removeHopByHopHeaders(httpRequest.Header)
 	httpRequest.Header.Set("Content-Type", "application/json")
+	for _, name := range []string{"Authorization", "X-API-Key"} {
+		for _, value := range shard.headers.Values(name) {
+			httpRequest.Header.Add(name, value)
+		}
+	}
 	response, err := p.client.Do(httpRequest)
 	if err != nil {
 		return embedResponse{}, fmt.Errorf("send request: %w", err)
@@ -279,30 +284,6 @@ func (p *proxy) embed(ctx context.Context, backend *url.URL, shard shardRequest)
 	return result, nil
 }
 
-func removeHopByHopHeaders(headers http.Header) {
-	for _, value := range headers.Values("Connection") {
-		for _, name := range strings.Split(value, ",") {
-			headers.Del(strings.TrimSpace(name))
-		}
-	}
-	for _, name := range []string{
-		"Accept-Encoding",
-		"Connection",
-		"Content-Encoding",
-		"Content-Length",
-		"Keep-Alive",
-		"Proxy-Authenticate",
-		"Proxy-Connection",
-		"Proxy-Authorization",
-		"Te",
-		"Trailer",
-		"Transfer-Encoding",
-		"Upgrade",
-	} {
-		headers.Del(name)
-	}
-}
-
 func serve(ctx context.Context, server *http.Server, listener net.Listener) error {
 	serveResult := make(chan error, 1)
 	go func() {
@@ -332,7 +313,6 @@ func newHTTPServer(address string, handler http.Handler) *http.Server {
 		Addr:              address,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       requestReadTimeout,
 		IdleTimeout:       time.Minute,
 	}
 }
@@ -357,12 +337,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	log.Printf(
-		"listening on %s; sharding between %s and %s",
-		listener.Addr(),
-		backendLogAddress(backends[0]),
-		backendLogAddress(backends[1]),
-	)
+	log.Printf("listening on %s; sharding between %s and %s", listener.Addr(), backends[0], backends[1])
 	if err := serve(ctx, server, listener); err != nil {
 		log.Fatal(err)
 	}
