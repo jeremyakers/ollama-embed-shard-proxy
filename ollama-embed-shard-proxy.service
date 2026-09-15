@@ -1,0 +1,18 @@
+[Unit]
+Description=Shard Ollama embedding batches across two GB10 nodes
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/ollama-embed-shard-proxy/environment
+ExecStartPre=/usr/bin/curl -fsS --max-time 10 ${OLLAMA_BACKEND_0}/api/version
+ExecStartPre=/usr/bin/curl -fsS --max-time 10 ${OLLAMA_BACKEND_1}/api/version
+ExecStart=%h/.local/bin/ollama-embed-shard-proxy -listen ${LISTEN_ADDRESS} -backends ${OLLAMA_BACKEND_0},${OLLAMA_BACKEND_1} -timeout ${BACKEND_TIMEOUT}
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
